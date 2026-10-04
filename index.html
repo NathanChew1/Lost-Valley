@@ -1,0 +1,1472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="description" content="A girl walks without stopping through impossible architecture. You cannot move her — you can only turn the world.">
+<title>The Turning</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;1,300&family=Jost:wght@300;400&display=swap">
+
+<style>
+  /* A deliberately single-theme world: this is a dark place, and it stays dark
+     on any host background. Every colour is painted explicitly. */
+  :root {
+    --ink:   #e8e6e1;
+    --muted: #6f737d;
+    --amber: #f3c164;
+    --serif: "Cormorant Garamond", Georgia, serif;
+    --sans:  "Jost", ui-sans-serif, system-ui, sans-serif;
+  }
+
+  html, body { margin: 0; height: 100%; background: #06050f; overflow: hidden; }
+  body { font-family: var(--sans); color: var(--ink); -webkit-font-smoothing: antialiased; }
+
+  #stage { position: fixed; inset: 0; touch-action: none; cursor: grab; display: block; background: transparent; }
+  #stage.dragging { cursor: grabbing; }
+
+  .hud { position: fixed; pointer-events: none; user-select: none; }
+
+  #sky, #wisps, #vignette {
+    position: fixed; inset: 0; pointer-events: none;
+    transition: opacity 1.4s, background 1.4s;
+  }
+  #sky { z-index: 0; }
+  #wisps { z-index: 1; background-size: cover; background-position: center; mix-blend-mode: screen; }
+  #stage { z-index: 2; }
+  #vignette { z-index: 3; }
+
+  #grain {
+    position: fixed; inset: 0; z-index: 2;
+    pointer-events: none;
+    opacity: 0.04;
+    mix-blend-mode: overlay;
+    background-repeat: repeat;
+  }
+
+  #numeral {
+    top: 28px; left: 34px;
+    font-family: var(--serif);
+    font-size: 30px; font-style: italic; letter-spacing: 0.04em;
+    color: var(--ink); opacity: 0.4;
+    transition: opacity 1.2s;
+  }
+
+  #progress {
+    transition: opacity 1.2s;
+    top: 36px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 9px;
+  }
+  #progress span {
+    width: 34px; height: 2px; border-radius: 2px;
+    background: rgba(232,230,225,0.14);
+    transition: background 0.8s, box-shadow 0.8s;
+  }
+  #progress span.done { background: rgba(243,193,100,0.55); }
+  #progress span.now  { background: var(--amber); box-shadow: 0 0 10px rgba(243,193,100,0.55); }
+
+  #keys {
+    transition: opacity 1.2s;
+    bottom: 30px; right: 34px;
+    font-size: 9.5px; letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--muted); opacity: 0.5;
+    display: flex; align-items: center; gap: 14px;
+  }
+  #keys span { width: 1px; height: 9px; background: currentColor; opacity: 0.4; }
+  #keys i { font-style: normal; }
+
+  #whisper {
+    bottom: 34px; left: 0; right: 0;
+    text-align: center;
+    font-size: 11px; font-weight: 300;
+    letter-spacing: 0.34em; text-transform: uppercase;
+    color: var(--muted);
+    opacity: 0; transition: opacity 1.6s;
+  }
+  #whisper.show { opacity: 0.85; }
+
+  #title {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 22px;
+    background: radial-gradient(ellipse at center, rgba(6,7,10,0.72) 0%, rgba(6,7,10,0.97) 70%);
+    transition: opacity 1.6s;
+  }
+  #title h1 {
+    font-family: var(--serif); font-weight: 300; font-style: italic;
+    font-size: clamp(42px, 9vw, 86px);
+    margin: 0; letter-spacing: 0.02em; color: var(--ink);
+    text-shadow: 0 0 60px rgba(243,193,100,0.18);
+  }
+  #title p {
+    margin: 0; font-size: 11px; letter-spacing: 0.34em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  #title.gone { opacity: 0; pointer-events: none; }
+
+  #fade {
+    position: fixed; inset: 0; background: #06070a;
+    opacity: 0; pointer-events: none; transition: opacity 0.9s;
+  }
+  #fade.on { opacity: 1; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #title, #fade, #whisper, #numeral { transition-duration: 0.01ms; }
+  }
+</style>
+
+<div id="sky"></div>
+<div id="wisps"></div>
+<canvas id="stage"></canvas>
+<div id="vignette"></div>
+<div class="hud" id="progress"><span></span><span></span><span></span><span></span></div>
+<div class="hud" id="keys">R&nbsp;&nbsp;restart<span></span>T&nbsp;&nbsp;tips<span></span><i id="sound">M&nbsp;&nbsp;sound on</i></div>
+<div class="hud" id="numeral"></div>
+<div class="hud" id="whisper"></div>
+<div id="title">
+  <h1>The Turning</h1>
+  <p>drag or tap to turn the world</p>
+</div>
+<div id="fade"></div>
+
+<script>
+// ===========================================================================
+//  THE TURNING
+//  An autonomous agent walks a world of impossible geometry. She decides where
+//  to go from what she can see of her own surroundings; she has no plan and no
+//  destination. You cannot move her. You can only turn the world, and what
+//  looks connected becomes connected.
+// ===========================================================================
+
+const LEVELS = {"I":{"path":[[0,0,0],[1,0,0],[2,0,0],[3,0,0],[4,1,-2],[5,1,-2],[6,1,-2]],"solid":[[0,-1,0],[0,-2,0],[0,-3,0],[0,-4,0],[1,-1,0],[1,-2,0],[1,-3,0],[1,-4,0],[2,-1,0],[2,-2,0],[2,-3,0],[2,-4,0],[3,-1,0],[3,-2,0],[3,-3,0],[3,-4,0],[4,0,-2],[4,-1,-2],[4,-2,-2],[4,-3,-2],[4,-4,-2],[4,-5,-2],[5,0,-2],[5,-1,-2],[5,-2,-2],[5,-3,-2],[5,-4,-2],[5,-5,-2],[6,0,-2],[6,-1,-2],[6,-2,-2],[6,-3,-2],[6,-4,-2],[6,-5,-2],[-1,-2,0],[-1,-3,0],[-1,-4,0],[0,-2,1],[0,-3,1],[0,-4,1],[0,-2,-1],[0,-3,-1],[0,-4,-1],[4,-2,0],[4,-3,0],[4,-4,0],[3,-2,1],[3,-3,1],[3,-4,1],[3,-2,-1],[3,-3,-1],[3,-4,-1],[3,-1,-2],[3,-2,-2],[3,-3,-2],[4,-1,-1],[4,-2,-1],[4,-3,-1],[4,-1,-3],[4,-2,-3],[4,-3,-3],[7,-1,-2],[7,-2,-2],[7,-3,-2],[6,-1,-1],[6,-2,-1],[6,-3,-1],[6,-1,-3],[6,-2,-3],[6,-3,-3],[4,-2,3],[4,-3,3],[4,-4,3],[2,-1,-4],[2,-2,-4],[2,-3,-4],[2,-4,-4]],"start":[0,0,0],"exit":[6,1,-2],"rots":[1],"segs":[4,3]},"II":{"path":[[0,0,0],[1,0,0],[2,0,0],[3,0,0],[1,-2,3],[1,-2,4],[1,-2,5],[1,-2,6],[3,-4,9],[4,-4,9],[5,-4,9]],"solid":[[0,-1,0],[0,-2,0],[0,-3,0],[0,-4,0],[1,-1,0],[1,-2,0],[1,-3,0],[1,-4,0],[2,-1,0],[2,-2,0],[2,-3,0],[2,-4,0],[3,-1,0],[3,-2,0],[3,-3,0],[3,-4,0],[1,-3,3],[1,-4,3],[1,-5,3],[1,-6,3],[1,-7,3],[1,-8,3],[1,-3,4],[1,-4,4],[1,-5,4],[1,-6,4],[1,-7,4],[1,-8,4],[1,-3,5],[1,-4,5],[1,-5,5],[1,-6,5],[1,-7,5],[1,-8,5],[1,-3,6],[1,-4,6],[1,-5,6],[1,-6,6],[1,-7,6],[1,-8,6],[3,-5,9],[3,-6,9],[3,-7,9],[3,-8,9],[3,-9,9],[3,-10,9],[3,-11,9],[3,-12,9],[4,-5,9],[4,-6,9],[4,-7,9],[4,-8,9],[4,-9,9],[4,-10,9],[4,-11,9],[4,-12,9],[5,-5,9],[5,-6,9],[5,-7,9],[5,-8,9],[5,-9,9],[5,-10,9],[5,-11,9],[5,-12,9],[-1,-2,0],[-1,-3,0],[-1,-4,0],[0,-2,1],[0,-3,1],[0,-4,1],[0,-2,-1],[0,-3,-1],[0,-4,-1],[4,-2,0],[4,-3,0],[4,-4,0],[3,-2,1],[3,-3,1],[3,-4,1],[3,-2,-1],[3,-3,-1],[3,-4,-1],[2,-4,3],[2,-5,3],[2,-6,3],[0,-4,3],[0,-5,3],[0,-6,3],[1,-4,2],[1,-5,2],[1,-6,2],[2,-4,6],[2,-5,6],[2,-6,6],[0,-4,6],[0,-5,6],[0,-6,6],[1,-4,7],[1,-5,7],[1,-6,7],[2,-6,9],[2,-7,9],[2,-8,9],[3,-6,10],[3,-7,10],[3,-8,10],[3,-6,8],[3,-7,8],[3,-8,8],[6,-6,9],[6,-7,9],[6,-8,9],[5,-6,10],[5,-7,10],[5,-8,10],[5,-6,8],[5,-7,8],[5,-8,8],[1,-2,2],[1,-3,2],[-1,-4,6],[-1,-5,6],[-1,-6,6],[-1,-7,6],[-1,-8,6],[1,-7,7],[1,-8,7],[1,-9,7]],"start":[0,0,0],"exit":[5,-4,9],"rots":[1,2],"segs":[4,4,3]},"III":{"path":[[0,0,0],[1,0,0],[2,0,0],[3,0,0],[5,-2,3],[5,-2,4],[5,-2,5],[4,-1,7],[3,-1,7],[2,-1,7],[1,-1,7],[-2,-3,9],[-2,-3,8],[-2,-3,7]],"solid":[[0,-1,0],[0,-2,0],[0,-3,0],[0,-4,0],[1,-1,0],[1,-2,0],[1,-3,0],[1,-4,0],[2,-1,0],[2,-2,0],[2,-3,0],[2,-4,0],[3,-1,0],[3,-2,0],[3,-3,0],[3,-4,0],[5,-3,3],[5,-4,3],[5,-5,3],[5,-6,3],[5,-7,3],[5,-8,3],[5,-3,4],[5,-4,4],[5,-5,4],[5,-6,4],[5,-7,4],[5,-8,4],[5,-3,5],[5,-4,5],[5,-5,5],[5,-6,5],[5,-7,5],[5,-8,5],[4,-2,7],[4,-3,7],[4,-4,7],[4,-5,7],[4,-6,7],[4,-7,7],[4,-8,7],[4,-9,7],[3,-2,7],[3,-3,7],[3,-4,7],[3,-5,7],[3,-6,7],[3,-7,7],[3,-8,7],[3,-9,7],[2,-2,7],[2,-3,7],[2,-4,7],[2,-5,7],[2,-6,7],[2,-7,7],[2,-8,7],[2,-9,7],[1,-2,7],[1,-3,7],[1,-4,7],[1,-5,7],[1,-6,7],[1,-7,7],[1,-8,7],[1,-9,7],[-2,-4,9],[-2,-5,9],[-2,-6,9],[-2,-7,9],[-2,-8,9],[-2,-9,9],[-2,-10,9],[-2,-11,9],[-2,-12,9],[-2,-13,9],[-2,-4,8],[-2,-5,8],[-2,-6,8],[-2,-7,8],[-2,-8,8],[-2,-9,8],[-2,-10,8],[-2,-11,8],[-2,-12,8],[-2,-13,8],[-2,-4,7],[-2,-5,7],[-2,-6,7],[-2,-7,7],[-2,-8,7],[-2,-9,7],[-2,-10,7],[-2,-11,7],[-2,-12,7],[-2,-13,7],[-1,-2,0],[-1,-3,0],[-1,-4,0],[0,-2,1],[0,-3,1],[0,-4,1],[0,-2,-1],[0,-3,-1],[0,-4,-1],[4,-2,0],[4,-3,0],[4,-4,0],[3,-2,1],[3,-3,1],[3,-4,1],[3,-2,-1],[3,-3,-1],[3,-4,-1],[6,-4,3],[6,-5,3],[6,-6,3],[4,-4,3],[4,-5,3],[4,-6,3],[5,-4,2],[5,-5,2],[5,-6,2],[6,-4,5],[6,-5,5],[6,-6,5],[4,-4,5],[4,-5,5],[4,-6,5],[5,-4,6],[5,-5,6],[5,-6,6],[5,-3,7],[5,-4,7],[5,-5,7],[4,-3,8],[4,-4,8],[4,-5,8],[4,-3,6],[4,-4,6],[4,-5,6],[0,-3,7],[0,-4,7],[0,-5,7],[1,-3,8],[1,-4,8],[1,-5,8],[1,-3,6],[1,-4,6],[1,-5,6],[-1,-5,9],[-1,-6,9],[-1,-7,9],[-3,-5,9],[-3,-6,9],[-3,-7,9],[-2,-5,10],[-2,-6,10],[-2,-7,10],[-1,-5,7],[-1,-6,7],[-1,-7,7],[-3,-5,7],[-3,-6,7],[-3,-7,7],[-2,-5,6],[-2,-6,6],[-2,-7,6],[-1,-2,3],[-1,-3,3],[-1,-4,3],[-1,-5,3],[-1,-6,3],[0,-3,10],[0,-4,10],[0,-5,10],[0,-5,6],[0,-6,6],[0,-7,6],[0,-8,6],[0,-9,6]],"start":[0,0,0],"exit":[-2,-3,7],"rots":[2,3,1],"segs":[4,3,4,3]},"IV":{"path":[[0,0,0],[1,0,0],[2,0,0],[3,1,-2],[3,1,-3],[3,1,-4],[3,1,-5],[6,-1,-7],[7,-1,-7],[8,-1,-7],[10,-3,-4],[10,-3,-3],[10,-3,-2],[13,-1,-4],[14,-1,-4],[15,-1,-4]],"solid":[[0,-1,0],[0,-2,0],[0,-3,0],[0,-4,0],[1,-1,0],[1,-2,0],[1,-3,0],[1,-4,0],[2,-1,0],[2,-2,0],[2,-3,0],[2,-4,0],[3,0,-2],[3,-1,-2],[3,-2,-2],[3,-3,-2],[3,-4,-2],[3,-5,-2],[3,0,-3],[3,-1,-3],[3,-2,-3],[3,-3,-3],[3,-4,-3],[3,-5,-3],[3,0,-4],[3,-1,-4],[3,-2,-4],[3,-3,-4],[3,-4,-4],[3,-5,-4],[3,0,-5],[3,-1,-5],[3,-2,-5],[3,-3,-5],[3,-4,-5],[3,-5,-5],[6,-2,-7],[6,-3,-7],[6,-4,-7],[6,-5,-7],[6,-6,-7],[6,-7,-7],[6,-8,-7],[6,-9,-7],[7,-2,-7],[7,-3,-7],[7,-4,-7],[7,-5,-7],[7,-6,-7],[7,-7,-7],[7,-8,-7],[7,-9,-7],[8,-2,-7],[8,-3,-7],[8,-4,-7],[8,-5,-7],[8,-6,-7],[8,-7,-7],[8,-8,-7],[8,-9,-7],[10,-4,-4],[10,-5,-4],[10,-6,-4],[10,-7,-4],[10,-8,-4],[10,-9,-4],[10,-10,-4],[10,-11,-4],[10,-12,-4],[10,-13,-4],[10,-4,-3],[10,-5,-3],[10,-6,-3],[10,-7,-3],[10,-8,-3],[10,-9,-3],[10,-10,-3],[10,-11,-3],[10,-12,-3],[10,-13,-3],[10,-4,-2],[10,-5,-2],[10,-6,-2],[10,-7,-2],[10,-8,-2],[10,-9,-2],[10,-10,-2],[10,-11,-2],[10,-12,-2],[10,-13,-2],[13,-2,-4],[13,-3,-4],[13,-4,-4],[13,-5,-4],[13,-6,-4],[13,-7,-4],[13,-8,-4],[13,-9,-4],[13,-10,-4],[13,-11,-4],[13,-12,-4],[13,-13,-4],[14,-2,-4],[14,-3,-4],[14,-4,-4],[14,-5,-4],[14,-6,-4],[14,-7,-4],[14,-8,-4],[14,-9,-4],[14,-10,-4],[14,-11,-4],[14,-12,-4],[14,-13,-4],[15,-2,-4],[15,-3,-4],[15,-4,-4],[15,-5,-4],[15,-6,-4],[15,-7,-4],[15,-8,-4],[15,-9,-4],[15,-10,-4],[15,-11,-4],[15,-12,-4],[15,-13,-4],[-1,-2,0],[-1,-3,0],[-1,-4,0],[0,-2,1],[0,-3,1],[0,-4,1],[0,-2,-1],[0,-3,-1],[0,-4,-1],[3,-2,0],[3,-3,0],[3,-4,0],[2,-2,1],[2,-3,1],[2,-4,1],[2,-2,-1],[2,-3,-1],[2,-4,-1],[4,-1,-2],[4,-2,-2],[4,-3,-2],[2,-1,-2],[2,-2,-2],[2,-3,-2],[3,-1,-1],[3,-2,-1],[3,-3,-1],[4,-1,-5],[4,-2,-5],[4,-3,-5],[2,-1,-5],[2,-2,-5],[2,-3,-5],[3,-1,-6],[3,-2,-6],[3,-3,-6],[5,-3,-7],[5,-4,-7],[5,-5,-7],[6,-3,-6],[6,-4,-6],[6,-5,-6],[6,-3,-8],[6,-4,-8],[6,-5,-8],[9,-3,-7],[9,-4,-7],[9,-5,-7],[8,-3,-6],[8,-4,-6],[8,-5,-6],[8,-3,-8],[8,-4,-8],[8,-5,-8],[11,-5,-4],[11,-6,-4],[11,-7,-4],[9,-5,-4],[9,-6,-4],[9,-7,-4],[10,-5,-5],[10,-6,-5],[10,-7,-5],[11,-5,-2],[11,-6,-2],[11,-7,-2],[9,-5,-2],[9,-6,-2],[9,-7,-2],[10,-5,-1],[10,-6,-1],[10,-7,-1],[12,-3,-4],[12,-4,-4],[12,-5,-4],[13,-3,-3],[13,-4,-3],[13,-5,-3],[13,-3,-5],[13,-4,-5],[13,-5,-5],[16,-3,-4],[16,-4,-4],[16,-5,-4],[15,-3,-3],[15,-4,-3],[15,-5,-3],[15,-3,-5],[15,-4,-5],[15,-5,-5],[5,-2,2],[5,-3,2],[5,-1,-1],[5,-2,-1],[5,-3,-1],[10,-3,-9],[10,-4,-9],[10,-5,-9],[10,-6,-9],[13,-5,-1],[13,-6,-1],[13,-7,-1],[13,-8,-1],[11,-3,-7],[11,-4,-7],[11,-5,-7]],"start":[0,0,0],"exit":[15,-1,-4],"rots":[1,3,2,1],"segs":[3,4,3,3,3]}};
+const ORDER = ['I', 'II', 'III', 'IV'];
+
+// --- palettes: each level sinks further into the dark ----------------------
+const MOOD = [
+  { sky: ['#3a3270', '#1b1640'], glow: 'rgba(150,130,220,0.30)', wisp: 0.26, vig: 0.42,
+    top: [238, 234, 248], xf: [198, 190, 224], zf: [158, 148, 196], fog: [22, 18, 48], haze: 0.52, dust: 0.9 },
+  { sky: ['#2d2660', '#14102f'], glow: 'rgba(130,112,205,0.26)', wisp: 0.22, vig: 0.50,
+    top: [230, 226, 243], xf: [186, 178, 215], zf: [144, 134, 184], fog: [17, 13, 36], haze: 0.60, dust: 0.75 },
+  { sky: ['#201a4c', '#0d0a22'], glow: 'rgba(112,96,185,0.22)', wisp: 0.17, vig: 0.58,
+    top: [221, 216, 237], xf: [173, 165, 205], zf: [130, 120, 172], fog: [12, 9, 27], haze: 0.68, dust: 0.6 },
+  { sky: ['#161138', '#06050f'], glow: 'rgba(96,82,165,0.18)', wisp: 0.12, vig: 0.66,
+    top: [212, 206, 230], xf: [160, 152, 196], zf: [117, 108, 160], fog: [7, 5, 16], haze: 0.76, dust: 0.45 },
+];
+
+// Faces are lit by which way they face in the BLOCK, never by where the world
+// has been turned to. Rotating therefore changes what you see, never how the
+// stone is lit — the one thing that must not shimmer while you drag.
+const TONE = { y: 1.0, x: 0.63, z: 0.41 };
+
+// --- isometric projection --------------------------------------------------
+// The whole illusion lives here: a point moved by (d, d, d) lands on exactly
+// the same pixel, so depth along that axis is invisible.
+const AX = Math.sqrt(3) / 2, AY = 0.5, AH = 1;
+
+function project(x, y, z, th) {
+  const c = Math.cos(th), s = Math.sin(th);
+  const X = x * c - z * s, Z = x * s + z * c;
+  return { sx: (X - Z) * AX, sy: (X + Z) * AY - y * AH, d: X + y + Z };
+}
+
+// Integer version used for the rules, valid at the four square-on rotations.
+function rotI(v, r) {
+  let [x, y, z] = v;
+  for (let i = 0; i < ((r % 4) + 4) % 4; i++) { const nx = -z, nz = x; x = nx; z = nz; }
+  return [x, y, z];
+}
+function uv(t, r) { const [x, y, z] = rotI(t, r); return [x - z, x + z - 2 * y]; }
+const K = t => t.join(',');
+const STEPS = [[1, 1], [-1, 1], [-1, -1], [1, -1]];
+
+// ===========================================================================
+//  WORLD
+// ===========================================================================
+class World {
+  constructor(data, index) {
+    this.data = data;
+    this.index = index;
+    this.mood = MOOD[index];
+
+    this.path = data.path.map(p => p.slice());
+    this.solid = data.solid.map(p => p.slice());
+    this.blocks = [
+      ...this.solid.map(p => ({ p, solid: true })),
+      ...this.path.map(p => ({ p, solid: false })),
+    ];
+    // a fixed grain per block so the stone never shimmers while you turn it
+    this.blocks.forEach(b => {
+      b.grain = (Math.sin(b.p[0] * 12.9898 + b.p[1] * 78.233 + b.p[2] * 37.719) * 43758.5453) % 1;
+    });
+
+
+    this.topY = Math.max(...this.path.map(p => p[1]));
+    const occupied = new Set(this.blocks.map(b => K(b.p)));
+    this.tops = this.path.filter(([x, y, z]) => !occupied.has(K([x, y + 1, z])));
+    this.idx = new Map(this.tops.map((t, i) => [K(t), i]));
+    this.startIdx = this.idx.get(K(data.start));
+    this.exitIdx = this.idx.get(K(data.exit));
+
+    this.shadeBlocks();
+    this.graphs = [0, 1, 2, 3].map(r => this.buildGraph(r));
+    this.frame();
+  }
+
+  // A block's colour never changes: its tone comes from the face direction,
+  // its fade from its height. Both are fixed, so the strings are built once
+  // instead of 750 times a frame.
+  shadeBlocks() {
+    const m = this.mood;
+    const occupied = new Set(this.blocks.map(q => K(q.p)));
+    const exitKey = K(this.data.exit);
+    for (const b of this.blocks) {
+      const isPath = !b.solid;
+      const sink = isPath ? 0 : Math.max(0, (this.topY - b.p[1])) / 9;
+      const haze = Math.min(0.92, sink * m.haze);
+      b.key = K(b.p);
+      const h = Math.abs((Math.sin(b.p[0] * 3.7 + b.p[1] * 19.3 + b.p[2] * 7.1) * 24634.6345) % 1);
+      b.window = b.solid && h > 0.74;
+      b.studs  = isPath && h < 0.22;
+      b.dome   = b.solid && h > 0.52 && h < 0.58;
+      b.haze = haze;
+      b.hidden = haze > 0.88;
+      b.isExit = isPath && K(b.p) === exitKey;
+      b.exposed = !occupied.has(K([b.p[0], b.p[1] + 1, b.p[2]]));
+      b.dome = b.dome && b.exposed && !isPath;
+      const lift = isPath ? 1.0 : 0.66;                  // the ruin sits back
+      b.col = [m.top, m.xf, m.zf].map(base => {
+        let c = base.map(v => v * lift * (0.965 + 0.07 * b.grain));
+        if (isPath) c = [c[0] * 1.03, c[1], c[2] * 0.95];  // warmer underfoot
+        if (b.isExit) c = [c[0] * 0.97, c[1] * 1.02, c[2] * 1.06];
+        return 'rgb(' + (c[0] + (m.fog[0] - c[0]) * haze | 0) + ',' +
+                        (c[1] + (m.fog[1] - c[1]) * haze | 0) + ',' +
+                        (c[2] + (m.fog[2] - c[2]) * haze | 0) + ')';
+      });
+      // a lighter cornice at the head of every wall, a darker joint underfoot
+      b.lip = 'rgba(255,255,255,' + (0.16 * (1 - haze)).toFixed(3) + ')';
+      b.groove = 'rgba(70,60,110,' + (0.20 * (1 - haze)).toFixed(3) + ')';
+      b.glowWin = 'rgba(255,226,170,' + (0.5 * (1 - haze)).toFixed(3) + ')';
+      b.shadeA = 'rgba(14,10,34,' + (0.34 * (1 - haze)).toFixed(3) + ')';
+      b.shadeB = 'rgba(14,10,34,' + (0.11 * (1 - haze)).toFixed(3) + ')';
+    }
+  }
+
+  buildGraph(r) {
+    const byUV = new Map();
+    this.tops.forEach((t, i) => byUV.set(K(uv(t, r)), i));
+    return this.tops.map((t, i) => {
+      const [u, v] = uv(t, r);
+      return STEPS.map(([du, dv]) => byUV.get(K([u + du, v + dv])));
+    });
+  }
+
+  component(r, i) {
+    const seen = new Set([i]), stack = [i];
+    while (stack.length) {
+      const n = stack.pop();
+      for (const m of this.graphs[r][n]) if (m !== undefined && !seen.has(m)) { seen.add(m); stack.push(m); }
+    }
+    return seen;
+  }
+
+  // Fix the camera once, from the widest the structure ever gets, so the view
+  // never lurches while the world turns.
+  frame() {
+    let min = [Infinity, Infinity], max = [-Infinity, -Infinity];
+    const c = [0, 0, 0];
+    this.path.forEach(p => { c[0] += p[0]; c[1] += p[1]; c[2] += p[2]; });
+    this.centre = c.map(v => v / this.path.length);
+    for (let r = 0; r < 4; r++) {
+      const th = r * Math.PI / 2;
+      this.path.forEach(p => {
+        const q = project(p[0] - this.centre[0], p[1] - this.centre[1], p[2] - this.centre[2], th);
+        min[0] = Math.min(min[0], q.sx); max[0] = Math.max(max[0], q.sx);
+        min[1] = Math.min(min[1], q.sy); max[1] = Math.max(max[1], q.sy);
+      });
+    }
+    // room for the stone she stands on, and a little of the ruin beneath it
+    this.span = [max[0] - min[0] + 3.0, max[1] - min[1] + 6.0];
+    this.off = [-(min[0] + max[0]) / 2, -(min[1] + max[1]) / 2 - 0.5];
+  }
+}
+
+// ===========================================================================
+//  THE GIRL  —  her entire mind, in three rules
+// ===========================================================================
+class Girl {
+  constructor(world) {
+    this.w = world;
+    this.node = world.startIdx;
+    this.dir = [0, 1, 2, 3].find(d => world.graphs[0][this.node][d] !== undefined) ?? 0;
+    this.t = 0;
+    this.faceAngle = this.dir * Math.PI / 2;
+    this.stride = 0;
+    this.from = this.node;
+    this.to = this.node;
+    this.moving = false;
+    this.facing = 1;
+  }
+
+  // RULE: keep going the way you are going. If you can't, turn. If you can't
+  // turn, turn around. She never looks further than the block in front of her.
+  decide(r) {
+    const adj = this.w.graphs[r][this.node];
+    if (adj[this.dir] !== undefined) return this.dir;
+    const right = (this.dir + 1) % 4, left = (this.dir + 3) % 4;
+    if (adj[right] !== undefined) return right;
+    if (adj[left] !== undefined) return left;
+    return (this.dir + 2) % 4;
+  }
+
+  // turn on the spot, smoothly, by the shortest way round
+  turn(dt) {
+    const target = this.dir * Math.PI / 2;
+    let d = target - this.faceAngle;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    this.faceAngle += d * Math.min(1, dt / 70);
+  }
+
+  step(dt, r, speed) {
+    if (!this.moving) {
+      const d = this.decide(r);
+      const next = this.w.graphs[r][this.node][d];
+      if (next === undefined) return;          // stranded: she simply waits
+      this.dir = d;
+      this.from = this.node;
+      this.to = next;
+      this.moving = true;
+      this.t = 0;
+      this.facing = (d === 0 || d === 3) ? 1 : -1;
+    }
+    this.t += dt / speed;
+    if (this.t >= 1) { this.node = this.to; this.from = this.to; this.t = 0; this.moving = false; this.stride++; sfx.step(); }
+  }
+
+  settle() {
+    // if she is more than half way across, let her finish the step rather than
+    // sliding back — turning the world should never look like it moved her
+    if (this.moving && this.t > 0.5) this.node = this.to;
+    this.moving = false; this.t = 0; this.from = this.to = this.node;
+  }
+
+  screen(th, w) {
+    // +0.5 puts her feet on the TOP FACE of the block rather than at its
+    // centre, which is what used to leave her hanging off the front edge.
+    const a = w.tops[this.from], b = w.tops[this.to];
+    const pa = project(a[0] - w.centre[0], a[1] + 0.5 - w.centre[1], a[2] - w.centre[2], th);
+    const pb = project(b[0] - w.centre[0], b[1] + 0.5 - w.centre[1], b[2] - w.centre[2], th);
+    const k = this.moving ? this.t : 0;
+    return { sx: pa.sx + (pb.sx - pa.sx) * k, sy: pa.sy + (pb.sy - pa.sy) * k, d: pa.d + (pb.d - pa.d) * k };
+  }
+}
+
+
+// ===========================================================================
+//  SOUND
+//  Everything here is synthesised at runtime — no files, so the page stays a
+//  single document. A low drone for the dark, a step, a turn of stone, a bell
+//  when a way opens, and a chord when she reaches the light.
+// ===========================================================================
+let AC = null, master = null, droneGain = null, droneOscs = [], muted = false;
+try { muted = localStorage.getItem('turning-muted') === '1'; } catch (e) {}
+
+function noiseBuffer() {
+  const n = AC.sampleRate * 1.2;
+  const buf = AC.createBuffer(1, n, AC.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  return buf;
+}
+let NOISE = null;
+
+function initAudio() {
+  if (AC) return;
+  try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return; }
+  NOISE = noiseBuffer();
+  master = AC.createGain();
+  master.gain.value = 0;
+  master.connect(AC.destination);
+  master.gain.setTargetAtTime(muted ? 0 : 0.5, AC.currentTime, 1.5);
+
+  // the drone: three detuned voices under a slowly breathing filter
+  droneGain = AC.createGain();
+  droneGain.gain.value = 0.10;
+  const lp = AC.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 320;
+  lp.Q.value = 2;
+  droneGain.connect(lp); lp.connect(master);
+
+  const lfo = AC.createOscillator(), lfoG = AC.createGain();
+  lfo.frequency.value = 0.05; lfoG.gain.value = 110;
+  lfo.connect(lfoG); lfoG.connect(lp.frequency); lfo.start();
+
+  for (const f of [55, 82.4, 110.2]) {
+    const o = AC.createOscillator();
+    o.type = 'triangle';
+    o.frequency.value = f;
+    const g = AC.createGain();
+    g.gain.value = f === 55 ? 0.5 : 0.22;
+    o.connect(g); g.connect(droneGain);
+    o.start();
+    droneOscs.push(o);
+  }
+
+  // a breath of air underneath it all
+  const air = AC.createBufferSource();
+  air.buffer = NOISE; air.loop = true;
+  const af = AC.createBiquadFilter();
+  af.type = 'bandpass'; af.frequency.value = 480; af.Q.value = 0.6;
+  const ag = AC.createGain(); ag.gain.value = 0.022;
+  air.connect(af); af.connect(ag); ag.connect(master);
+  air.start();
+}
+
+function burst(freq, q, dur, vol, type) {
+  if (!AC || muted) return;
+  const src = AC.createBufferSource();
+  src.buffer = NOISE;
+  const f = AC.createBiquadFilter();
+  f.type = type || 'bandpass'; f.frequency.value = freq; f.Q.value = q;
+  const g = AC.createGain();
+  g.gain.setValueAtTime(vol, AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + dur);
+  src.connect(f); f.connect(g); g.connect(master);
+  src.start(); src.stop(AC.currentTime + dur + 0.05);
+  return f;
+}
+
+function tone(freq, dur, vol, type, delay) {
+  if (!AC || muted) return;
+  const t0 = AC.currentTime + (delay || 0);
+  const o = AC.createOscillator();
+  o.type = type || 'sine';
+  o.frequency.value = freq;
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(vol, t0 + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(master);
+  o.start(t0); o.stop(t0 + dur + 0.05);
+}
+
+const sfx = {
+  step() { burst(260 + Math.random() * 90, 1.2, 0.09, 0.05); },
+  turn() {
+    const f = burst(300, 0.8, 0.5, 0.05, 'lowpass');
+    if (f) {
+      f.frequency.setValueAtTime(200, AC.currentTime);
+      f.frequency.linearRampToValueAtTime(1100, AC.currentTime + 0.2);
+      f.frequency.linearRampToValueAtTime(260, AC.currentTime + 0.5);
+    }
+    tone(72, 0.5, 0.05, 'sine');
+  },
+  open() {                                   // a way has opened
+    tone(587.33, 1.6, 0.075, 'sine');
+    tone(880, 1.9, 0.045, 'sine', 0.06);
+  },
+  arrive() {                                 // she reaches the light
+    [392, 523.25, 659.25, 783.99].forEach((f, i) => tone(f, 2.2, 0.075, 'sine', i * 0.13));
+  },
+  surface() {                                // the ending
+    [261.63, 329.63, 392, 523.25].forEach((f, i) => tone(f, 6, 0.06, 'sine', i * 0.5));
+    if (droneGain && AC) droneGain.gain.setTargetAtTime(0.03, AC.currentTime, 2);
+  },
+};
+
+// the deeper she goes, the lower the drone sits
+function tuneDrone(level) {
+  if (!AC) return;
+  const k = [1, 0.94, 0.89, 0.84][level] || 1;
+  droneOscs.forEach((o, i) => o.frequency.setTargetAtTime([55, 82.4, 110.2][i] * k, AC.currentTime, 2));
+}
+
+function toggleMute() {
+  muted = !muted;
+  try { localStorage.setItem('turning-muted', muted ? '1' : '0'); } catch (e) {}
+  if (master && AC) master.gain.setTargetAtTime(muted ? 0 : 0.5, AC.currentTime, 0.3);
+  elSound.textContent = muted ? 'M  sound off' : 'M  sound on';
+}
+
+// ===========================================================================
+//  GAME
+// ===========================================================================
+const cv = document.getElementById('stage');
+const cx = cv.getContext('2d');
+const elNum = document.getElementById('numeral');
+const elWhisper = document.getElementById('whisper');
+const elTitle = document.getElementById('title');
+const elFade = document.getElementById('fade');
+const elProgress = document.getElementById('progress');
+const elKeys = document.getElementById('keys');
+const elSound = document.getElementById('sound');
+
+let W, girl, levelNo = 0;
+let theta = 0, committed = 0, targetTheta = 0, spinning = false;
+let dragging = false, dragX = 0, dragTheta = 0, moved = 0;
+let spinFrom = 0, spinT = 0;
+const SPIN_MS = 430;
+let mode = 'title';
+let clearT = 0, endT = 0, idle = 0, tipsUntil = 0;
+let DETAIL = true, lowRes = false, slowFrames = 0;
+let reachSize = 0;
+let scale = 1, dpr = 1;
+const STEP_MS = 455;
+
+function loadLevel(n) {
+  levelNo = n;
+  W = new World(LEVELS[ORDER[n]], n);
+  girl = new Girl(W);
+  theta = committed = targetTheta = 0;
+  idle = 0;
+  const m = MOOD[n];
+  document.getElementById('sky').style.background =
+    'radial-gradient(ellipse 80% 55% at 50% 22%, ' + m.glow + ' 0%, rgba(0,0,0,0) 70%), ' +
+    'linear-gradient(' + m.sky[0] + ', ' + m.sky[1] + ')';
+  document.getElementById('wisps').style.opacity = m.wisp;
+  document.getElementById('vignette').style.background =
+    'radial-gradient(ellipse 72% 72% at 50% 46%, rgba(0,0,0,0) 35%, rgba(2,1,8,' + m.vig + ') 100%),' +
+    'linear-gradient(rgba(0,0,0,0) 55%, rgba(' + m.fog.join(',') + ',0.92) 100%)';
+  reachSize = W.component(0, W.startIdx).size;
+  tuneDrone(n);
+  elNum.textContent = ORDER[n];
+  elNum.style.opacity = 0.4;
+  elProgress.style.opacity = '';
+  elKeys.style.opacity = '';
+  [...elProgress.children].forEach((seg, i) => {
+    seg.className = i < n ? 'done' : (i === n ? 'now' : '');
+  });
+  if (n === 0) say('drag or tap to turn the world');
+  else if (n === 1) say('she walks on what looks connected');
+  else elWhisper.classList.remove('show');
+  resize();
+}
+
+let sayTimer = null;
+function say(text) {
+  elWhisper.textContent = text;
+  elWhisper.classList.add('show');
+  clearTimeout(sayTimer);
+  sayTimer = setTimeout(() => elWhisper.classList.remove('show'), 6500);
+}
+
+function resize() {
+  dpr = lowRes ? 1 : Math.min(window.devicePixelRatio || 1, innerWidth * innerHeight > 1500000 ? 1.5 : 2);
+  cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
+  cv.style.width = innerWidth + 'px'; cv.style.height = innerHeight + 'px';
+  if (W) {
+    const pad = innerWidth < 640 ? 0.95 : 0.91;
+    scale = Math.min(innerWidth * pad / W.span[0], innerHeight * pad / W.span[1]);
+  }
+}
+addEventListener('resize', resize);
+
+// --- input -----------------------------------------------------------------
+function down(e) {
+  initAudio();
+  if (mode === 'title') { startGame(); return; }
+  if (mode !== 'play' || spinning) return;
+  dragging = true; moved = 0;
+  dragX = e.clientX; dragTheta = theta;
+  girl.settle();                       // she stands still while the world turns
+  cv.classList.add('dragging');
+  cv.setPointerCapture?.(e.pointerId);
+}
+function move(e) {
+  if (!dragging) return;
+  const dx = e.clientX - dragX;
+  moved = Math.max(moved, Math.abs(dx));
+  theta = dragTheta - dx * 0.009;
+}
+function up(e) {
+  if (!dragging) return;
+  dragging = false;
+  cv.classList.remove('dragging');
+  const quarter = Math.PI / 2;
+  if (moved < 6) {
+    // a tap, not a drag: turn a quarter, the way the tap was aimed
+    const left = (e && e.clientX !== undefined ? e.clientX : innerWidth) < innerWidth / 2;
+    beginSpin(Math.round(theta / quarter) * quarter + (left ? quarter : -quarter));
+  } else {
+    beginSpin(Math.round(theta / quarter) * quarter);
+  }
+}
+
+function beginSpin(target) {
+  sfx.turn();
+  spinFrom = theta;
+  targetTheta = target;
+  spinT = 0;
+  spinning = true;
+}
+cv.addEventListener('pointerdown', down);
+addEventListener('pointermove', move);
+addEventListener('pointerup', up);
+addEventListener('pointercancel', up);
+
+addEventListener('keydown', e => {
+  initAudio();
+  if (e.key === 'm' || e.key === 'M') toggleMute();
+  if (mode === 'title' && (e.key === ' ' || e.key === 'Enter')) return startGame();
+  if (mode === 'ending' && (e.key === 'r' || e.key === 'R')) { mode = 'play'; loadLevel(0); }
+  if (mode !== 'play' || spinning || dragging) return;
+  if (e.key === 'ArrowLeft') { girl.settle(); beginSpin(Math.round(theta / (Math.PI / 2)) * (Math.PI / 2) + Math.PI / 2); }
+  if (e.key === 'ArrowRight') { girl.settle(); beginSpin(Math.round(theta / (Math.PI / 2)) * (Math.PI / 2) - Math.PI / 2); }
+  if (e.key === 'r' || e.key === 'R') loadLevel(levelNo);
+  if (e.key === 't' || e.key === 'T') {
+    tipsUntil = performance.now() + 6000;
+    say('turn the world until the warm stones meet');
+  }
+});
+
+function startGame() {
+  elTitle.classList.add('gone');
+  mode = 'play';
+  loadLevel(0);
+}
+
+// --- light as instruction --------------------------------------------------
+// She is standing exactly where a turn would open the way: her stone warms,
+// and the stone she could reach answers it. This is the only tutorial.
+function bridgeAhead() {
+  if (girl.moving) return null;
+  const comp = W.component(committed, girl.node);
+  for (let k = 1; k <= 3; k++) {
+    const r = (committed + k) % 4;
+    for (const m of W.graphs[r][girl.node]) {
+      if (m !== undefined && !comp.has(m)) return [W.tops[girl.node], W.tops[m]];
+    }
+  }
+  return null;
+}
+
+// after a long pause, show the far side too
+function findBridge() {
+  const comp = W.component(committed, girl.node);
+  for (let k = 1; k <= 3; k++) {
+    const r = (committed + k) % 4;
+    for (const n of comp) {
+      for (const m of W.graphs[r][n]) {
+        if (m !== undefined && !comp.has(m)) return [W.tops[n], W.tops[m]];
+      }
+    }
+  }
+  return null;
+}
+
+// ===========================================================================
+//  RENDER
+// ===========================================================================
+const CORNERS = [
+  [-.5, -.5, -.5], [.5, -.5, -.5], [.5, -.5, .5], [-.5, -.5, .5],
+  [-.5, .5, -.5], [.5, .5, -.5], [.5, .5, .5], [-.5, .5, .5],
+];
+const FACES = [
+  { v: [4, 5, 6, 7], n: [0, 1, 0] },
+  { v: [0, 1, 5, 4], n: [0, 0, -1] },
+  { v: [1, 2, 6, 5], n: [1, 0, 0] },
+  { v: [2, 3, 7, 6], n: [0, 0, 1] },
+  { v: [3, 0, 4, 7], n: [-1, 0, 0] },
+];
+const LIGHT = (() => { const l = [-0.45, 1, -0.25]; const m = Math.hypot(...l); return l.map(v => v / m); })();
+
+function facing(n, th) {                 // is this face turned toward us?
+  const c = Math.cos(th), s = Math.sin(th);
+  return (n[0] * c - n[2] * s) + n[1] + (n[0] * s + n[2] * c);
+}
+const toneOf = n => n[1] ? TONE.y : (n[0] ? TONE.x : TONE.z);
+
+// The architecture only changes when the world turns. So it is painted into
+// two cached layers — everything behind her, and everything in front — and a
+// normal frame is two drawImage calls plus the handful of things that move.
+const layerBack = document.createElement('canvas');
+const layerFront = document.createElement('canvas');
+const bcx = layerBack.getContext('2d');
+const fcx = layerFront.getContext('2d');
+let layerKey = '';
+
+function paintBlocks(cx, items, mood, lo, hi, skip) {
+  const ct = Math.cos(theta), stt = Math.sin(theta);
+  const VIS = [];
+  for (const f of FACES) {
+    const n = f.n;
+    if ((n[0] * ct - n[2] * stt) + n[1] + (n[0] * stt + n[2] * ct) > 0.0005) VIS.push(f);
+  }
+  const cxp = innerWidth / 2 + W.off[0] * scale, cyp = innerHeight / 2 + W.off[1] * scale;
+  const margin = scale * 2.2;
+  const C = CORNER_BUF;
+
+  for (const it of items) {
+    if (it.kind !== 'block') continue;
+    if (it.d < lo || it.d >= hi) continue;
+    const b = it.b;
+    if (b.hidden || (skip && skip.has(b.key))) continue;
+    const bx = cxp + it.sx * scale, by = cyp + it.sy * scale;
+    if (bx < -margin || bx > innerWidth + margin || by < -margin || by > innerHeight + margin) continue;
+
+    const isPath = !b.solid;
+    const ox = b.p[0] - W.centre[0], oy = b.p[1] - W.centre[1], oz = b.p[2] - W.centre[2];
+    for (let i = 0; i < 8; i++) {
+      const c = CORNERS[i];
+      const x = ox + c[0], y = oy + c[1], z = oz + c[2];
+      const X = x * ct - z * stt, Z = x * stt + z * ct;
+      C[i * 2] = cxp + ((X - Z) * AX) * scale;
+      C[i * 2 + 1] = cyp + ((X + Z) * AY - y * AH) * scale;
+    }
+    const soft = DETAIL && b.haze < 0.62 && scale > 14;
+
+    for (let k = 0; k < VIS.length; k++) {
+      const f = VIS[k], v = f.v;
+      const x0 = C[v[0] * 2], y0 = C[v[0] * 2 + 1], x1 = C[v[1] * 2], y1 = C[v[1] * 2 + 1];
+      const x2 = C[v[2] * 2], y2 = C[v[2] * 2 + 1], x3 = C[v[3] * 2], y3 = C[v[3] * 2 + 1];
+
+      cx.beginPath();
+      cx.moveTo(x0, y0); cx.lineTo(x1, y1); cx.lineTo(x2, y2); cx.lineTo(x3, y3);
+      cx.closePath();
+      cx.fillStyle = b.col[f.n[1] ? 0 : (f.n[0] ? 1 : 2)];
+      cx.fill();
+
+      // Shadow pools at the foot of every wall and fades upward — a gradient,
+      // not steps, so nothing reads as a band or an edge.
+      if (!soft) continue;
+      // u runs along the face, v runs up it
+      const P = (u, vv) => [x0 + (x1 - x0) * u + (x3 - x0) * vv, y0 + (y1 - y0) * u + (y3 - y0) * vv];
+
+      if (f.n[1]) {
+        // ---- the top of the stone -----------------------------------------
+        if (isPath) {                                  // paving, cut in courses
+          cx.beginPath();
+          for (const u of [0.34, 0.67]) {
+            const a1 = P(u, 0), a2 = P(u, 1);
+            cx.moveTo(a1[0], a1[1]); cx.lineTo(a2[0], a2[1]);
+          }
+          cx.strokeStyle = b.groove;
+          cx.lineWidth = Math.max(0.5, scale * 0.012);
+          cx.stroke();
+          if (b.studs) {                               // two worn markers
+            cx.fillStyle = b.groove;
+            for (const u of [0.3, 0.7]) {
+              const c0 = P(u, 0.5);
+              cx.beginPath(); cx.ellipse(c0[0], c0[1], scale * 0.055, scale * 0.032, 0, 0, Math.PI * 2); cx.fill();
+            }
+          }
+        } else if (b.dome && b.haze < 0.45) {          // a roof, and its finial
+          const c0 = P(0.5, 0.5), r = scale * 0.34;
+          cx.beginPath();                                 // its shadow on the roof
+          cx.ellipse(c0[0], c0[1] + r * 0.06, r * 1.05, r * 0.56, 0, 0, Math.PI * 2);
+          cx.fillStyle = b.col[2];
+          cx.fill();
+          cx.beginPath();                                 // the dome itself, raised
+          cx.ellipse(c0[0], c0[1], r, r * 1.0, 0, Math.PI, Math.PI * 2);
+          cx.ellipse(c0[0], c0[1], r, r * 0.5, 0, 0, Math.PI);
+          cx.fillStyle = b.col[1];
+          cx.fill();
+          cx.beginPath();                                 // light down one side
+          cx.ellipse(c0[0] - r * 0.22, c0[1] - r * 0.26, r * 0.46, r * 0.5, -0.5, Math.PI * 0.9, Math.PI * 2.1);
+          cx.fillStyle = b.col[0];
+          cx.fill();
+          cx.beginPath();                                 // a finial on top
+          cx.moveTo(c0[0], c0[1] - r * 1.0);
+          cx.lineTo(c0[0], c0[1] - r * 1.75);
+          cx.strokeStyle = b.col[1];
+          cx.lineWidth = Math.max(0.9, scale * 0.032);
+          cx.stroke();
+        }
+        continue;
+      }
+
+      // ---- walls ----------------------------------------------------------
+      const g = cx.createLinearGradient(x0, y0, x0 + (x3 - x0), y0 + (y3 - y0));
+      g.addColorStop(0, b.shadeA);
+      g.addColorStop(0.42, b.shadeB);
+      g.addColorStop(1, 'rgba(14,10,34,0)');
+      cx.beginPath();
+      cx.moveTo(x0, y0); cx.lineTo(x1, y1); cx.lineTo(x2, y2); cx.lineTo(x3, y3);
+      cx.closePath();
+      cx.fillStyle = g;
+      cx.fill();
+
+      // a cornice runs along the head of the wall
+      const l0 = P(0, 0.88), l1 = P(1, 0.88), l2 = P(1, 1), l3 = P(0, 1);
+      cx.beginPath();
+      cx.moveTo(l0[0], l0[1]); cx.lineTo(l1[0], l1[1]); cx.lineTo(l2[0], l2[1]); cx.lineTo(l3[0], l3[1]);
+      cx.closePath();
+      cx.fillStyle = b.lip;
+      cx.fill();
+
+      // a tall arched window, lit from somewhere inside
+      if (b.window && b.haze < 0.44) {
+        const bl = P(0.34, 0.1), br = P(0.66, 0.1), tr = P(0.66, 0.52), tl = P(0.34, 0.52), ap = P(0.5, 0.86);
+        cx.beginPath();
+        cx.moveTo(bl[0], bl[1]); cx.lineTo(tl[0], tl[1]);
+        cx.quadraticCurveTo(ap[0], ap[1], tr[0], tr[1]);
+        cx.lineTo(br[0], br[1]); cx.closePath();
+        cx.fillStyle = 'rgba(10,7,26,' + (0.62 * (1 - b.haze)).toFixed(3) + ')';
+        cx.fill();
+        const il = P(0.41, 0.14), ir = P(0.59, 0.14), itr = P(0.59, 0.48), itl = P(0.41, 0.48), iap = P(0.5, 0.74);
+        cx.beginPath();
+        cx.moveTo(il[0], il[1]); cx.lineTo(itl[0], itl[1]);
+        cx.quadraticCurveTo(iap[0], iap[1], itr[0], itr[1]);
+        cx.lineTo(ir[0], ir[1]); cx.closePath();
+        cx.fillStyle = b.glowWin;
+        cx.fill();
+      }
+    }
+  }
+}
+
+function drawWorld(now) {
+  const mood = W.mood;
+  const cxp = innerWidth / 2 + W.off[0] * scale, cyp = innerHeight / 2 + W.off[1] * scale;
+  const items = [];
+
+  for (let i = 0; i < W.blocks.length; i++) {
+    const b = W.blocks[i];
+    const q = project(b.p[0] - W.centre[0], b.p[1] - W.centre[1], b.p[2] - W.centre[2], theta);
+    items.push({ kind: 'block', b, i, d: Math.round(q.d * 1e4) / 1e4, sx: q.sx, sy: q.sy });
+  }
+  const g = girl.screen(theta, W);
+  const split = Math.round((project(
+    W.tops[girl.from][0] - W.centre[0],
+    W.tops[girl.from][1] - W.centre[1],
+    W.tops[girl.from][2] - W.centre[2], theta).d + 1.5) * 1e4) / 1e4;
+  items.sort((p, q2) => (p.d - q2.d) || (p.i - q2.i));
+
+  const tipping = now < tipsUntil;
+  const bridge = ((idle > 22 || tipping) && mode === 'play') ? findBridge() : null;
+  const bridgeKeys = bridge ? new Set(bridge.map(K)) : null;
+  const strength = tipping ? 0.8 : 0.5;
+  const pulse = 0.5 + 0.5 * Math.sin(now / 420);
+
+  // While the world is turning the architecture changes every frame, so it is
+  // drawn straight to the screen. The moment it settles — which is most of the
+  // time — it is painted once into two cached layers and simply blitted.
+  if (dragging || spinning) {
+    layerKey = '';
+    paintBlocks(cx, items, mood, -Infinity, split, bridgeKeys);
+    if (bridgeKeys) paintHinted(items, mood, bridgeKeys, strength, pulse, -Infinity, split);
+    drawGirl({ sx: g.sx, sy: g.sy }, cxp, cyp, now);
+    if (bridgeKeys) paintHinted(items, mood, bridgeKeys, strength, pulse, split, Infinity);
+    paintBlocks(cx, items, mood, split, Infinity, bridgeKeys);
+  } else {
+    const key = [levelNo, Math.round(theta * 2000), split, cv.width, cv.height, DETAIL,
+                 bridge ? bridge.map(K).join() : ''].join('|');
+    if (key !== layerKey) {
+      layerKey = key;
+      for (const c of [layerBack, layerFront]) { c.width = cv.width; c.height = cv.height; }
+      bcx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      fcx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      paintBlocks(bcx, items, mood, -Infinity, split, bridgeKeys);
+      paintBlocks(fcx, items, mood, split, Infinity, bridgeKeys);
+    }
+    cx.save(); cx.setTransform(1, 0, 0, 1, 0, 0); cx.drawImage(layerBack, 0, 0); cx.restore();
+    if (bridgeKeys) paintHinted(items, mood, bridgeKeys, strength, pulse, -Infinity, split);
+    drawGirl({ sx: g.sx, sy: g.sy }, cxp, cyp, now);
+    if (bridgeKeys) paintHinted(items, mood, bridgeKeys, strength, pulse, split, Infinity);
+    cx.save(); cx.setTransform(1, 0, 0, 1, 0, 0); cx.drawImage(layerFront, 0, 0); cx.restore();
+  }
+
+  for (const it of items) if (it.b.isExit && !it.b.hidden) drawExitLight(it, cxp, cyp, now);
+
+  drawDust(now, mood);
+}
+
+function paintHinted(items, mood, keys, strength, pulse, lo, hi) {
+  const ct = Math.cos(theta), stt = Math.sin(theta);
+  const cxp = innerWidth / 2 + W.off[0] * scale, cyp = innerHeight / 2 + W.off[1] * scale;
+  const C = CORNER_BUF;
+  const k = 1 + strength * pulse;
+  for (const it of items) {
+    const b = it.b;
+    if (!keys.has(b.key) || it.d < lo || it.d >= hi) continue;
+    const ox = b.p[0] - W.centre[0], oy = b.p[1] - W.centre[1], oz = b.p[2] - W.centre[2];
+    for (let i = 0; i < 8; i++) {
+      const c = CORNERS[i];
+      const x = ox + c[0], y = oy + c[1], z = oz + c[2];
+      const X = x * ct - z * stt, Z = x * stt + z * ct;
+      C[i * 2] = cxp + ((X - Z) * AX) * scale;
+      C[i * 2 + 1] = cyp + ((X + Z) * AY - y * AH) * scale;
+    }
+    for (const f of FACES) {
+      const n = f.n;
+      if ((n[0] * ct - n[2] * stt) + n[1] + (n[0] * stt + n[2] * ct) <= 0.0005) continue;
+      const v = f.v;
+      cx.beginPath();
+      cx.moveTo(C[v[0] * 2], C[v[0] * 2 + 1]);
+      cx.lineTo(C[v[1] * 2], C[v[1] * 2 + 1]);
+      cx.lineTo(C[v[2] * 2], C[v[2] * 2 + 1]);
+      cx.lineTo(C[v[3] * 2], C[v[3] * 2 + 1]);
+      cx.closePath();
+      const base = n[1] ? mood.top : (n[0] ? mood.xf : mood.zf);
+      cx.fillStyle = 'rgb(' + Math.min(255, base[0] * 0.78 * k | 0) + ',' +
+                              Math.min(255, base[1] * 0.80 * k | 0) + ',' +
+                              Math.min(255, base[2] * 0.88 * k | 0) + ')';
+      cx.fill();
+    }
+  }
+}
+
+const CORNER_BUF = new Float64Array(16);
+
+// Film grain lives in a CSS layer rather than the canvas: compositing it once
+// costs nothing per frame, where blending it in canvas cost 34ms.
+// Soft drifts of light in the deep, generated once and composited by the
+// browser — the background costs nothing per frame.
+let wispURL = null;
+function makeWisps() {
+  const c = document.createElement('canvas');
+  c.width = 900; c.height = 560;
+  const g = c.getContext('2d');
+  g.filter = 'blur(26px)';
+  for (let i = 0; i < 22; i++) {
+    const r = (n) => Math.abs((Math.sin(i * 12.9898 + n * 78.233) * 43758.5453) % 1);
+    const x = r(1) * 1000 - 50, y = r(2) * 620 - 30;
+    const len = 160 + r(3) * 420, lean = -0.9 - r(4) * 0.5;
+    g.strokeStyle = 'rgba(190,175,255,' + (0.07 + r(5) * 0.11).toFixed(3) + ')';
+    g.lineWidth = 8 + r(6) * 40;
+    g.lineCap = 'round';
+    g.beginPath();
+    g.moveTo(x, y);
+    g.quadraticCurveTo(x + len * 0.4, y + len * lean * 0.5, x + len * 0.25, y + len * lean);
+    g.stroke();
+  }
+  wispURL = c.toDataURL();
+  document.getElementById('wisps').style.backgroundImage = 'url(' + wispURL + ')';
+}
+
+(function grain() {
+  const g = document.createElement('canvas');
+  g.width = g.height = 140;
+  const gc = g.getContext('2d');
+  const im = gc.createImageData(140, 140);
+  for (let i = 0; i < im.data.length; i += 4) {
+    const v = 100 + Math.random() * 110;
+    im.data[i] = im.data[i + 1] = im.data[i + 2] = v;
+    im.data[i + 3] = 255;
+  }
+  gc.putImageData(im, 0, 0);
+  const d = document.createElement('div');
+  d.id = 'grain';
+  d.style.backgroundImage = `url(${g.toDataURL()})`;
+  document.body.appendChild(d);
+})();
+
+// motes in the lamplight, drifting up out of the dark
+const MOTES = Array.from({ length: 42 }, (_, i) => ({
+  x: (Math.sin(i * 12.9898) * 43758.5453) % 1,
+  y: (Math.sin(i * 78.233) * 43758.5453) % 1,
+  r: 0.4 + Math.abs((Math.sin(i * 37.719) * 43758.5453) % 1) * 1.5,
+  sp: 0.1 + Math.abs((Math.sin(i * 7.13) * 43758.5453) % 1) * 0.35,
+}));
+
+function drawDust(now, mood) {
+  cx.save();
+  for (const m of MOTES) {
+    const x = (Math.abs(m.x) + Math.sin(now / 9000 + m.y * 9) * 0.02) % 1 * innerWidth;
+    const y = (Math.abs(m.y) - (now / 1000) * m.sp * 0.02) % 1;
+    const Y = (y < 0 ? y + 1 : y) * innerHeight;
+    cx.globalAlpha = 0.055 * mood.dust * (0.5 + 0.5 * Math.sin(now / 1400 + m.x * 20));
+    cx.fillStyle = '#ffeec6';
+    cx.beginPath(); cx.arc(x, Y, m.r, 0, Math.PI * 2); cx.fill();
+  }
+  cx.restore();
+}
+
+const hexRGB = h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16));
+
+function drawExitLight(it, cxp, cyp, now) {
+  const X = cxp + it.sx * scale, Y = cyp + it.sy * scale - scale * 0.5;
+  const breathe = 0.78 + 0.22 * Math.sin(now / 1100);
+
+  // a pool of light lying on the stone
+  const pool = cx.createRadialGradient(X, Y, 0, X, Y, scale * 0.95);
+  pool.addColorStop(0, 'rgba(228,249,255,' + (0.46 * breathe).toFixed(3) + ')');
+  pool.addColorStop(1, 'rgba(180,225,255,0)');
+  cx.fillStyle = pool;
+  cx.beginPath();
+  cx.ellipse(X, Y, scale * 0.95, scale * 0.5, 0, 0, Math.PI * 2);
+  cx.fill();
+
+  // the shaft, narrowing as it rises
+  const bh = scale * 5.2;
+  const beam = cx.createLinearGradient(0, Y - bh, 0, Y);
+  beam.addColorStop(0, 'rgba(210,240,255,0)');
+  beam.addColorStop(0.6, 'rgba(216,242,255,' + (0.13 * breathe).toFixed(3) + ')');
+  beam.addColorStop(1, 'rgba(238,250,255,' + (0.40 * breathe).toFixed(3) + ')');
+  cx.fillStyle = beam;
+  cx.beginPath();
+  cx.moveTo(X - scale * 0.07, Y - bh);
+  cx.lineTo(X + scale * 0.07, Y - bh);
+  cx.lineTo(X + scale * 0.42, Y);
+  cx.lineTo(X - scale * 0.42, Y);
+  cx.closePath();
+  cx.fill();
+
+  // three rings turning slowly around the shaft, like a mechanism at rest
+  for (let i = 0; i < 3; i++) {
+    const t = now / 2600 + i * 0.33;
+    const lift = scale * (0.55 + i * 0.62);
+    const rw = scale * (0.46 - i * 0.07) * (0.85 + 0.15 * Math.sin(t * 2));
+    cx.beginPath();
+    cx.ellipse(X, Y - lift, rw, rw * (0.3 + 0.22 * Math.abs(Math.sin(t))), 0, 0, Math.PI * 2);
+    cx.strokeStyle = 'rgba(234,250,255,' + (0.34 * breathe * (1 - i * 0.22)).toFixed(3) + ')';
+    cx.lineWidth = Math.max(0.8, scale * 0.028);
+    cx.stroke();
+  }
+
+  // the core, and what rises off it
+  const core = cx.createRadialGradient(X, Y - scale * 0.1, 0, X, Y - scale * 0.1, scale * 0.6);
+  core.addColorStop(0, 'rgba(255,255,255,' + (0.9 * breathe).toFixed(3) + ')');
+  core.addColorStop(0.4, 'rgba(226,246,255,' + (0.4 * breathe).toFixed(3) + ')');
+  core.addColorStop(1, 'rgba(200,235,255,0)');
+  cx.fillStyle = core;
+  cx.beginPath(); cx.arc(X, Y - scale * 0.1, scale * 0.6, 0, Math.PI * 2); cx.fill();
+
+  for (let i = 0; i < 10; i++) {
+    const t = ((now / 3200) + i / 10) % 1;
+    const px = X + Math.sin(now / 1100 + i * 2.1) * scale * 0.26 * t;
+    const py = Y - t * bh * 0.8;
+    cx.fillStyle = 'rgba(236,250,255,' + ((1 - t) * 0.45 * breathe).toFixed(3) + ')';
+    cx.beginPath(); cx.arc(px, py, scale * 0.03 * (1 - t * 0.4), 0, Math.PI * 2); cx.fill();
+  }
+}
+
+// ===========================================================================
+//  SIX — built out of solid boxes, not drawn as a picture. Her parts live in
+//  the rotated frame and face the way she walks, so turning never deforms her.
+// ===========================================================================
+function boxCorners(a, u, sd, hw, hh, hd, topScale = 1) {
+  const out = [];
+  for (const [sy, k] of [[-1, 1], [1, topScale]]) {
+    for (const [sa, ss] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      out.push([a + sa * hw * k, u + sy * hh, sd + ss * hd * k]);
+    }
+  }
+  return out;
+}
+
+const PART_FACES = [
+  { v: [4, 5, 6, 7], n: [0, 1, 0] },
+  { v: [0, 1, 5, 4], n: [0, 0, -1] },
+  { v: [1, 2, 6, 5], n: [1, 0, 0] },
+  { v: [2, 3, 7, 6], n: [0, 0, 1] },
+  { v: [3, 0, 4, 7], n: [-1, 0, 0] },
+];
+
+function drawGirl(it, cxp, cyp, now) {
+  const X = cxp + it.sx * scale, Y = cyp + it.sy * scale;
+  const lead = girl.stride % 2 ? 1 : -1;
+  const phase = girl.moving ? Math.sin(girl.t * Math.PI) * lead : 0;
+  const bob = girl.moving ? Math.sin(girl.t * Math.PI) * 0.028 : 0;
+
+  // her own lamplight, thrown on the stone around her
+  const glow = cx.createRadialGradient(X, Y - scale * 0.3, 0, X, Y - scale * 0.3, scale * 4.6);
+  glow.addColorStop(0, 'rgba(250,212,140,0.32)');
+  glow.addColorStop(0.3, 'rgba(243,193,100,0.11)');
+  glow.addColorStop(1, 'rgba(243,193,100,0)');
+  cx.fillStyle = glow;
+  cx.beginPath(); cx.arc(X, Y - scale * 0.3, scale * 4.6, 0, Math.PI * 2); cx.fill();
+
+  cx.fillStyle = 'rgba(0,0,0,0.38)';
+  cx.beginPath(); cx.ellipse(X, Y, scale * 0.26, scale * 0.1, 0, 0, Math.PI * 2); cx.fill();
+
+  // Which way is "forward" in the rotated frame: screen step 0 is +x, 1 is +z,
+  // 2 is -x, 3 is -z. She turns in 90° steps, like everything else here.
+  const ca = Math.cos(girl.faceAngle), sa = Math.sin(girl.faceAngle);
+  const toView = (a, u, sd) => [a * ca - sd * sa, u, a * sa + sd * ca];
+
+  const COAT = [240, 187, 74], HOOD = [236, 181, 70], LIMB = [48, 40, 29], FACE = [18, 14, 9];
+  const parts = [
+    // thin legs, out of step with each other
+    { c: boxCorners(phase * 0.13, 0.135, -0.072, 0.040, 0.135, 0.040), col: LIMB },
+    { c: boxCorners(-phase * 0.13, 0.135, 0.072, 0.040, 0.135, 0.040), col: LIMB },
+    // arms tucked against the coat, swinging the other way
+    { c: boxCorners(-phase * 0.09, 0.48, -0.168, 0.036, 0.125, 0.036), col: COAT },
+    { c: boxCorners(phase * 0.09, 0.48, 0.168, 0.036, 0.125, 0.036), col: COAT },
+    // the raincoat: wide at the hem, narrow at the shoulder
+    { c: boxCorners(0, 0.50, 0, 0.150, 0.235, 0.160, 0.66), col: COAT },
+    // the hood, and the little peak pulled forward over her face
+    { c: boxCorners(0.008, 0.865, 0, 0.138, 0.130, 0.148, 0.90), col: HOOD },
+    { c: boxCorners(0.125, 0.905, 0, 0.055, 0.020, 0.150), col: HOOD },
+  ];
+
+  const faces = [];
+  for (const part of parts) {
+    const pts3 = part.c.map(([a, u, sd]) => toView(a, u + bob, sd));
+    for (const f of PART_FACES) {
+      const n = toView(f.n[0], f.n[1], f.n[2]);
+      if (n[0] + n[1] + n[2] <= 0.0005) continue;
+      let d = 0;
+      const poly = f.v.map(i => {
+        const P = pts3[i];
+        const pr = project(P[0], P[1], P[2], 0);
+        d += pr.d;
+        return [X + pr.sx * scale, Y + pr.sy * scale];
+      });
+      const tone = n[1] ? 1.0 : (Math.abs(n[0]) > 0.5 ? 0.82 : 0.66);
+      faces.push({ poly, d: d / 4, col: part.col, tone });
+    }
+  }
+  faces.sort((p, r) => p.d - r.d);
+
+  for (const f of faces) {
+    cx.beginPath();
+    f.poly.forEach((q2, i) => i ? cx.lineTo(q2[0], q2[1]) : cx.moveTo(q2[0], q2[1]));
+    cx.closePath();
+    cx.fillStyle = `rgb(${f.col[0] * f.tone | 0},${f.col[1] * f.tone | 0},${f.col[2] * f.tone | 0})`;
+    cx.fill();
+  }
+
+  // the little flame she carries
+  const hand = toView(0.14 + phase * 0.06, 0.44 + bob, 0.175);
+  const hp = project(hand[0], hand[1], hand[2], 0);
+  const hx = X + hp.sx * scale, hy = Y + hp.sy * scale;
+  const flick = 0.8 + 0.2 * Math.sin(now / 70) + 0.1 * Math.sin(now / 31);
+  const fg = cx.createRadialGradient(hx, hy, 0, hx, hy, scale * 1.5 * flick);
+  fg.addColorStop(0, 'rgba(255,226,160,0.55)');
+  fg.addColorStop(0.4, 'rgba(255,196,96,0.16)');
+  fg.addColorStop(1, 'rgba(255,196,96,0)');
+  cx.fillStyle = fg;
+  cx.beginPath(); cx.arc(hx, hy, scale * 1.5 * flick, 0, Math.PI * 2); cx.fill();
+  cx.fillStyle = '#fff3cf';
+  cx.beginPath();
+  cx.ellipse(hx, hy - scale * 0.03, scale * 0.028 * flick, scale * 0.05 * flick, 0, 0, Math.PI * 2);
+  cx.fill();
+
+  // the dark under the hood, on whichever face she is looking out of
+  const fn = toView(1, 0, 0);
+  if (fn[0] + fn[1] + fn[2] > 0.0005) {
+    const hole = [[0.141, 0.945, -0.082], [0.141, 0.945, 0.082], [0.141, 0.815, 0.082], [0.141, 0.815, -0.082]]
+      .map(([a, u, sd]) => {
+        const P = toView(a, u + bob, sd);
+        const pr = project(P[0], P[1], P[2], 0);
+        return [X + pr.sx * scale, Y + pr.sy * scale];
+      });
+    cx.beginPath();
+    hole.forEach((q2, i) => i ? cx.lineTo(q2[0], q2[1]) : cx.moveTo(q2[0], q2[1]));
+    cx.closePath();
+    cx.fillStyle = `rgb(${FACE[0]},${FACE[1]},${FACE[2]})`;
+    cx.fill();
+  }
+}
+
+// --- the ending: she comes up out of the water ----------------------------
+const DROPS = Array.from({ length: 46 }, (_, i) => ({
+  a: (Math.sin(i * 12.9898) * 43758.5453) % 1,
+  d: Math.abs((Math.sin(i * 78.233) * 43758.5453) % 1),
+  t0: Math.abs((Math.sin(i * 7.13) * 43758.5453) % 1),
+}));
+const ISLES = [[-0.36, 0.055, 0.9], [0.30, 0.042, 0.7], [0.46, 0.028, 0.5], [-0.14, 0.022, 0.4]];
+
+function drawEnding(t) {
+  const w = innerWidth, h = innerHeight;
+  const rise = Math.min(1, Math.max(0, (t - 1000) / 3800));
+  const ease = rise < 0.5 ? 2 * rise * rise : 1 - Math.pow(-2 * rise + 2, 2) / 2;
+  const bright = Math.min(1, t / 3000);
+  const water = h * 0.66;
+  const fs0 = Math.min(h, w) * 0.085;
+  const gx = w / 2, gy = water + fs0 * 1.25 - ease * fs0 * 1.37;
+  const sunY = h * 0.24;
+
+  // --- sky ----------------------------------------------------------------
+  const sky = cx.createLinearGradient(0, 0, 0, water);
+  sky.addColorStop(0,    mix('#070910', '#bcd7e4', bright));
+  sky.addColorStop(0.45, mix('#090c14', '#e7f1f3', bright));
+  sky.addColorStop(1,    mix('#0b0e16', '#fbf6e9', bright));
+  cx.fillStyle = sky; cx.fillRect(0, 0, w, water + 1);
+
+  // --- sun, and the light it throws ---------------------------------------
+  const sun = cx.createRadialGradient(gx, sunY, 0, gx, sunY, h * 0.62);
+  sun.addColorStop(0, `rgba(255,250,232,${0.85 * bright})`);
+  sun.addColorStop(0.18, `rgba(255,241,206,${0.42 * bright})`);
+  sun.addColorStop(1, 'rgba(255,241,206,0)');
+  cx.fillStyle = sun; cx.fillRect(0, 0, w, water + 1);
+
+  cx.save();
+  cx.beginPath(); cx.rect(0, 0, w, water); cx.clip();
+  cx.translate(gx, sunY);
+  for (let i = 0; i < 14; i++) {
+    const a = i / 14 * Math.PI * 2 + t / 26000;
+    cx.save(); cx.rotate(a);
+    const g = cx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, `rgba(255,248,226,${0.05 * bright})`);
+    g.addColorStop(1, 'rgba(255,248,226,0)');
+    cx.fillStyle = g;
+    cx.beginPath(); cx.moveTo(0, 0); cx.lineTo(-h * 0.055, h); cx.lineTo(h * 0.055, h); cx.closePath(); cx.fill();
+    cx.restore();
+  }
+  cx.restore();
+
+  // --- far shapes, the last of the architecture ---------------------------
+  for (const [ix, ih, op] of ISLES) {
+    const bx = gx + ix * w, bh = h * ih;
+    cx.fillStyle = `rgba(${mixc(10, 150, bright)},${mixc(14, 170, bright)},${mixc(20, 186, bright)},${op * 0.5 * bright})`;
+    cx.beginPath();
+    cx.moveTo(bx - bh * 1.5, water);
+    cx.lineTo(bx - bh * 0.8, water - bh);
+    cx.lineTo(bx + bh * 0.9, water - bh * 0.82);
+    cx.lineTo(bx + bh * 1.6, water);
+    cx.closePath(); cx.fill();
+  }
+
+  // --- water --------------------------------------------------------------
+  const sea = cx.createLinearGradient(0, water, 0, h);
+  sea.addColorStop(0, mix('#0a0d14', '#b6cdd6', bright));
+  sea.addColorStop(0.35, mix('#080b11', '#93b3c1', bright));
+  sea.addColorStop(1, mix('#05070b', '#6f93a6', bright));
+  cx.fillStyle = sea; cx.fillRect(0, water, w, h - water);
+
+  // the sun's road on the water
+  const road = cx.createLinearGradient(0, water, 0, h);
+  road.addColorStop(0, `rgba(255,246,222,${0.35 * bright})`);
+  road.addColorStop(1, 'rgba(255,246,222,0)');
+  cx.fillStyle = road;
+  cx.beginPath();
+  cx.moveTo(gx - w * 0.035, water); cx.lineTo(gx + w * 0.035, water);
+  cx.lineTo(gx + w * 0.22, h); cx.lineTo(gx - w * 0.22, h);
+  cx.closePath(); cx.fill();
+
+  for (let i = 0; i < 26; i++) {
+    const yy = water + (i / 26) * (h - water) * (0.2 + i / 26);
+    const ww = (i / 26) * w * 0.4 + 10;
+    cx.strokeStyle = `rgba(255,255,255,${0.05 * bright * (1 - i / 30)})`;
+    cx.lineWidth = 1 + i * 0.07;
+    cx.beginPath();
+    cx.moveTo(gx - ww + Math.sin(t / 900 + i) * 14, yy);
+    cx.lineTo(gx + ww + Math.sin(t / 1100 + i * 1.7) * 14, yy);
+    cx.stroke();
+  }
+
+  // --- rings leaving the place she broke the surface ----------------------
+  for (let i = 0; i < 9; i++) {
+    const age = ((t / 1000) * 0.26 + i / 9) % 1;
+    const rr = age * w * 0.62;
+    cx.strokeStyle = `rgba(255,255,255,${(1 - age) * 0.34 * bright})`;
+    cx.lineWidth = 1.6 * (1 - age) + 0.4;
+    cx.beginPath(); cx.ellipse(gx, water, rr, rr * 0.16, 0, 0, Math.PI * 2); cx.stroke();
+  }
+
+  // --- her reflection, unquiet --------------------------------------------
+  if (ease > 0.55) {
+    cx.save();
+    cx.beginPath(); cx.rect(0, water, w, h - water); cx.clip();
+    cx.globalAlpha = 0.18 * bright * ((ease - 0.55) / 0.45);
+    cx.translate(gx + Math.sin(t / 700) * 3, water);
+    cx.scale(1, -0.52);
+    paintSixFront(fs0);
+    cx.restore();
+  }
+
+  // --- water falling off her as she comes up ------------------------------
+  const fs = fs0;
+  if (ease > 0.3 && ease < 0.99) {
+    for (const d of DROPS) {
+      const local = ((t - 1000) / 1500 + d.t0) % 1;
+      if (local < 0) continue;
+      const dx = (d.a * 2 - 1) * fs * 0.6;
+      const dy = gy + local * local * h * 0.18;
+      if (dy > water) continue;
+      cx.fillStyle = `rgba(255,255,255,${0.5 * (1 - local) * bright})`;
+      cx.beginPath(); cx.ellipse(gx + dx, dy, 1.3, 3.2, 0, 0, Math.PI * 2); cx.fill();
+    }
+  }
+
+  // --- her, clipped at the waterline so she truly comes up out of it ------
+  cx.save();
+  cx.beginPath(); cx.rect(0, 0, w, water + 1); cx.clip();
+  cx.translate(gx, gy);
+  paintSixFront(fs);
+  cx.restore();
+
+  // --- motes in the light --------------------------------------------------
+  for (const m of MOTES) {
+    const x = (Math.abs(m.x) * 1.37 + Math.sin(t / 7000 + m.y * 9) * 0.03) % 1 * w;
+    let y = (Math.abs(m.y) - (t / 1000) * m.sp * 0.03) % 1; if (y < 0) y += 1;
+    const Y = y * water;
+    cx.globalAlpha = 0.3 * bright * (0.4 + 0.6 * Math.sin(t / 1600 + m.x * 20));
+    cx.fillStyle = '#fffaf0';
+    cx.beginPath(); cx.arc(x, Y, m.r * 0.9, 0, Math.PI * 2); cx.fill();
+  }
+  cx.globalAlpha = 1;
+
+  // --- the only words in the game -----------------------------------------
+  if (t > 5000) {
+    const a = Math.min(1, (t - 5000) / 2000);
+    cx.globalAlpha = a * 0.85;
+    cx.fillStyle = '#39454c';
+    cx.textAlign = 'center';
+    cx.font = `italic 300 ${Math.min(80, w * 0.09)}px "Cormorant Garamond", Georgia, serif`;
+    cx.fillText('free', w / 2, h * 0.145);
+    cx.globalAlpha = a * 0.6;
+    cx.font = '300 10px "Jost", sans-serif';
+    cx.fillStyle = '#51636d';
+    cx.fillText('P R E S S   R', w / 2, h * 0.93);
+    cx.globalAlpha = 1;
+  }
+}
+
+// Seen from the front, surfacing: symmetrical, no brim, both legs together.
+function paintSixFront(s) {
+  const COAT = '#f0bb4a', COAT_HI = '#ffd77a', DARK = '#15110c';
+  cx.strokeStyle = '#2a2219'; cx.lineWidth = s * 0.12; cx.lineCap = 'round';
+  cx.beginPath();
+  cx.moveTo(-s * 0.1, -s * 0.26); cx.lineTo(-s * 0.12, s * 0.06);
+  cx.moveTo(s * 0.1, -s * 0.26);  cx.lineTo(s * 0.12, s * 0.06);
+  cx.stroke();
+
+  cx.beginPath();
+  cx.moveTo(-s * 0.24, -s * 0.98);
+  cx.quadraticCurveTo(-s * 0.44, -s * 0.66, -s * 0.38, -s * 0.22);
+  cx.quadraticCurveTo(0, -s * 0.12, s * 0.38, -s * 0.22);
+  cx.quadraticCurveTo(s * 0.44, -s * 0.66, s * 0.24, -s * 0.98);
+  cx.closePath();
+  cx.fillStyle = COAT; cx.fill();
+
+  cx.beginPath();
+  cx.moveTo(-s * 0.18, -s * 0.92);
+  cx.quadraticCurveTo(-s * 0.36, -s * 0.60, -s * 0.31, -s * 0.26);
+  cx.strokeStyle = COAT_HI; cx.lineWidth = s * 0.06; cx.stroke();
+
+  // hood
+  cx.beginPath();
+  cx.moveTo(-s * 0.26, -s * 0.95);
+  cx.quadraticCurveTo(-s * 0.36, -s * 1.46, 0, -s * 1.50);
+  cx.quadraticCurveTo(s * 0.36, -s * 1.46, s * 0.26, -s * 0.95);
+  cx.quadraticCurveTo(0, -s * 0.86, -s * 0.26, -s * 0.95);
+  cx.closePath();
+  cx.fillStyle = COAT; cx.fill();
+
+  cx.beginPath();
+  cx.moveTo(-s * 0.2, -s * 1.3);
+  cx.quadraticCurveTo(0, -s * 1.5, s * 0.2, -s * 1.3);
+  cx.strokeStyle = COAT_HI; cx.lineWidth = s * 0.055; cx.stroke();
+
+  cx.beginPath();
+  cx.ellipse(0, -s * 1.12, s * 0.185, s * 0.21, 0, 0, Math.PI * 2);
+  cx.fillStyle = DARK; cx.fill();
+}
+
+const mixc = (a, b, t) => Math.round(a + (b - a) * t);
+function mix(h1, h2, t) {
+  const p = h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16));
+  const a = p(h1), b = p(h2);
+  return `rgb(${mixc(a[0], b[0], t)},${mixc(a[1], b[1], t)},${mixc(a[2], b[2], t)})`;
+}
+
+// ===========================================================================
+//  LOOP
+// ===========================================================================
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(64, now - last); last = now;
+  const t0 = performance.now();
+  frame(dt, now);
+  // Two rungs of graceful degradation, so a slow machine still gets 60fps:
+  // first the fine detail goes, then the pixel density.
+  if (mode === 'play' && !(dragging || spinning)) {
+    slowFrames = (performance.now() - t0 > 22) ? slowFrames + 1 : 0;
+    if (slowFrames > 40) {
+      slowFrames = 0;
+      if (DETAIL) { DETAIL = false; layerKey = ''; }
+      else if (!lowRes) { lowRes = true; resize(); layerKey = ''; }
+    }
+  }
+  if (!window.__manual) requestAnimationFrame(loop);
+}
+
+function frame(dt, now) {
+
+  if (mode === 'ending') {
+    endT += dt;
+    cx.setTransform(1, 0, 0, 1, 0, 0);
+    cx.clearRect(0, 0, cv.width, cv.height);
+    cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawEnding(endT);
+    cx.setTransform(1, 0, 0, 1, 0, 0);
+    elNum.style.opacity = 0;
+    elProgress.style.opacity = 0;
+    elKeys.style.opacity = 0;
+    elWhisper.classList.remove('show');
+    return;
+  }
+
+  if (!W) return;
+
+  cx.clearRect(0, 0, cv.width, cv.height);
+  cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  if (spinning) {
+    spinT += dt;
+    const k = Math.min(1, spinT / SPIN_MS);
+    const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;   // ease in and out
+    theta = spinFrom + (targetTheta - spinFrom) * e;
+    if (k >= 1) {
+      theta = targetTheta;
+      spinning = false;
+      const r = ((Math.round(theta / (Math.PI / 2)) % 4) + 4) % 4;
+      if (r !== committed) {
+        committed = r; idle = 0;
+        const n = W.component(committed, girl.node).size;
+        if (n > reachSize) sfx.open();
+        reachSize = n;
+      }
+      girl.settle();
+    }
+  }
+  girl.turn(dt);
+
+  if (mode === 'play' && !dragging && !spinning) {
+    idle += dt / 1000;
+    girl.step(dt, committed, STEP_MS);
+    if (girl.node === W.exitIdx && !girl.moving) {
+      mode = 'clear'; clearT = 0;
+      sfx.arrive();
+      elNum.style.opacity = 0;
+    }
+  }
+
+  if (mode === 'clear') {
+    clearT += dt;
+    if (clearT > 620 && !elFade.classList.contains('on')) elFade.classList.add('on');
+    if (clearT > 1750) {
+      if (levelNo < ORDER.length - 1) {
+        loadLevel(levelNo + 1);
+        mode = 'play';
+        elFade.classList.remove('on');
+      } else {
+        mode = 'ending'; endT = 0;
+        sfx.surface();
+        elFade.classList.remove('on');
+        elNum.style.opacity = 0;
+      }
+    }
+  }
+
+  drawWorld(now);
+
+
+  cx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+// boot: show the first structure dimly behind the title
+makeWisps();
+W = new World(LEVELS[ORDER[0]], 0);
+girl = new Girl(W);
+resize();
+setTimeout(() => { if (mode === 'title') startGame(); }, 7000);
+requestAnimationFrame(loop);
+
+// --- a tiny console note for anyone who opens the hood --------------------
+window.__t = {
+  manual(){ window.__manual = true; },
+  frame(dt, now){ frame(dt, now); },
+  spin(r){ girl.settle(); beginSpin(r * Math.PI / 2); },
+  set(k, v){ if (k === 'mode') mode = v; if (k === 'endT') endT = v; if (k === 'level') loadLevel(v); },
+  turn(r){ girl.settle(); committed = r; theta = targetTheta = r * Math.PI/2; spinning = false; idle = 0; }, state(){ return { level: levelNo, mode, node: girl.node, exit: W.exitIdx, tops: W.tops.length, committed }; } };
+console.log('%cThe girl has three rules: go forward; if you cannot, turn; if you cannot turn, turn around.\nShe cannot see the exit. She cannot see you.', 'color:#f3c164');
+</script>
+
+</body>
+</html>
